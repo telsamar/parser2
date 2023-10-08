@@ -15,6 +15,7 @@ class YslSpider(scrapy.Spider):
         'FEED_EXPORT_INDENT': 4,
         'LOG_LEVEL': 'INFO',
     }
+
     item_count = 0
     current_category = None
     
@@ -22,6 +23,13 @@ class YslSpider(scrapy.Spider):
         yield SeleniumRequest(url='https://www.ysl.com/en-en', callback=self.parse)
 
     def parse(self, response):
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        driver = webdriver.Chrome(options=chrome_options)
+        driver.get(response.url)
+        time.sleep(5)
+        driver.quit()
+
         parent_li = response.xpath('//button[contains(text(), "SAINT LAURENT WOMEN")]/ancestor::li[@data-ref="item"][1]')
         
         for level2_elem in parent_li.xpath('.//li[@data-level2="true"]'):
@@ -30,7 +38,7 @@ class YslSpider(scrapy.Spider):
 
             if upper_level_href and upper_level_text:
                 self.logger.info(f"[UPPER LEVEL] {upper_level_href} - {upper_level_text}")
-                yield response.follow(upper_level_href, self.parse_details, meta={'category': upper_level_text})
+                yield response.follow(upper_level_href, self.parse_details, meta={'category': ["WOMAN", upper_level_text]})
 
             for li in level2_elem.xpath('.//ul[@data-ref="navlist"]/li'):
                 href = li.xpath('./a[@data-ref="link"]/@href').get()
@@ -39,39 +47,33 @@ class YslSpider(scrapy.Spider):
                 if href and link_text:
                     self.logger.info(f"[UPPER LEVEL] {upper_level_text}")
                     self.logger.info(f"[LOWER LEVEL] {href} - {link_text}")
-                    category_name = f"{upper_level_text} > {link_text}"
-                    yield response.follow(href, self.parse_details, meta={'category': category_name})
+                    category_list = ["WOMAN", upper_level_text, link_text]
+                    yield response.follow(href, self.parse_details, meta={'category': category_list})
 
     def parse_details(self, response):
         self.current_category = response.meta.get('category', None)
         self.item_count = 0 
         chrome_options = Options()
-        # chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless")
         driver = webdriver.Chrome(options=chrome_options)
         driver.get(response.url)
-        time.sleep(2)
+        time.sleep(1)
         last_height = driver.execute_script("return document.body.scrollHeight")
 
         while True:
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1)  # ждать 5 секунд
-
+            time.sleep(2)
             new_height = driver.execute_script("return document.body.scrollHeight")
             if new_height == last_height:
                 break
             last_height = new_height
             self.logger.warning("Еще листаю")
-
         self.logger.warning("Долистали до конца")
 
-        # Извлекаем HTML-код страницы после прокрутки
         source = driver.page_source
-        # Создаем новый Scrapy-ответ из этого HTML-кода
         new_response = scrapy.http.HtmlResponse(url=response.url, body=source, encoding='utf-8')
         
-        # Теперь используем Scrapy-селекторы с новым ответом
         product_divs = new_response.xpath('//div[@class="c-product__inner"]')
-        #
         for product_div in product_divs:
             product_link = product_div.xpath('.//a[@class="c-product__link c-product__focus"]/@href').get()
             if product_link:
@@ -85,31 +87,48 @@ class YslSpider(scrapy.Spider):
     def parse_product_details(self, response):
         product_name = response.css('h1.c-product__name::text').get()
         product_link = response.url
-
         if product_name:
             self.logger.info(f"Product Name: {product_name.strip()}")
-            category = response.meta.get('category', None)
+            category_list = response.meta.get('category', [])
 
-            # Извлекаем данные по заданным селекторам
-            article = response.css('span[data-bind="styleMaterialColor"]::text').get()
-            description = response.css('p[data-bind="longDescription"]::text').get()
-            composition = response.css('li.c-product__detailsitem::text').get()
+            article = response.css('span[data-bind="styleMaterialColor"]::text').get().strip()
+            description = response.css('p[data-bind="longDescription"]::text').get().strip()
+            composition_elements = response.css('li.c-product__detailsitem::text').getall()
+            composition = [elem.replace('\n', ' ').strip() for elem in composition_elements if elem.strip()]
+
+            primary_color = response.css('p.c-product__colorvalue::text').get()
+            sizes_divs = response.xpath('//div[@class="c-customselect__menu"]/div[position()>1]')
+            sizes = [div.xpath('.//text()').get().strip() for div in sizes_divs if div.xpath('.//text()').get()]
+
+            if not sizes:
+                sizes = None
+
+            color_list = []
+            if primary_color:
+                color_list.append(primary_color.strip())
+            else:
+                color_values = response.css('span[data-display-value]::attr(data-display-value)').getall()
+                unique_colors = list(set(color_values))
+                color_list.extend(unique_colors)
+
+            image_urls = response.css('img.c-product__image::attr(src)').getall()
+            unique_image_urls = list(set(image_urls))
+
             product = {
                         "url": product_link,
-                        "categories": category,
+                        "categories": category_list,
                         "article": article,
                         "name": product_name.strip(),
-                        "color": None,
-                        "images": [],
+                        "color": color_list,
+                        "images": unique_image_urls,
                         "price": None,
                         "old_price": None,
                         "currency": None,
                         "description": description,
                         "composition": composition,
-                        "sizes": {}
+                        "sizes": sizes,
                     }
             self.item_count += 1 
             yield product
-            self.logger.info(f"Сканирование категории {category} завершено")
         else:
-            self.logger.info("Product Name not found")
+            self.logger.info("Не найдено такого продукта")

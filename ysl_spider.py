@@ -1,6 +1,7 @@
 import scrapy
 from scrapy_selenium import SeleniumRequest
 from selenium import webdriver
+from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.chrome.options import Options
 import json
 import datetime
@@ -45,22 +46,32 @@ class YslSpider(scrapy.Spider):
         self.current_category = response.meta.get('category', None)
         self.item_count = 0 
         chrome_options = Options()
-        chrome_options.add_argument("--headless")
+        # chrome_options.add_argument("--headless")
         driver = webdriver.Chrome(options=chrome_options)
         driver.get(response.url)
-
+        time.sleep(2)
         last_height = driver.execute_script("return document.body.scrollHeight")
 
         while True:
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(5)  # ждать 5 секунд
+            time.sleep(1)  # ждать 5 секунд
 
             new_height = driver.execute_script("return document.body.scrollHeight")
             if new_height == last_height:
                 break
             last_height = new_height
+            self.logger.warning("Еще листаю")
 
-        product_divs = response.xpath('//div[@class="c-product__inner"]')
+        self.logger.warning("Долистали до конца")
+
+        # Извлекаем HTML-код страницы после прокрутки
+        source = driver.page_source
+        # Создаем новый Scrapy-ответ из этого HTML-кода
+        new_response = scrapy.http.HtmlResponse(url=response.url, body=source, encoding='utf-8')
+        
+        # Теперь используем Scrapy-селекторы с новым ответом
+        product_divs = new_response.xpath('//div[@class="c-product__inner"]')
+        #
         for product_div in product_divs:
             product_link = product_div.xpath('.//a[@class="c-product__link c-product__focus"]/@href').get()
             if product_link:
@@ -78,21 +89,27 @@ class YslSpider(scrapy.Spider):
         if product_name:
             self.logger.info(f"Product Name: {product_name.strip()}")
             category = response.meta.get('category', None)
+
+            # Извлекаем данные по заданным селекторам
+            article = response.css('span[data-bind="styleMaterialColor"]::text').get()
+            description = response.css('p[data-bind="longDescription"]::text').get()
+            composition = response.css('li.c-product__detailsitem::text').get()
             product = {
                         "url": product_link,
                         "categories": category,
-                        "article": None,
+                        "article": article,
                         "name": product_name.strip(),
                         "color": None,
                         "images": [],
                         "price": None,
                         "old_price": None,
                         "currency": None,
-                        "description": None,
-                        "composition": None,
+                        "description": description,
+                        "composition": composition,
                         "sizes": {}
                     }
             self.item_count += 1 
             yield product
+            self.logger.info(f"Сканирование категории {category} завершено")
         else:
             self.logger.info("Product Name not found")

@@ -6,7 +6,8 @@
 
 # useful for handling different item types with a single interface
 from itemadapter import ItemAdapter
-
+import json
+from datetime import datetime
 
 # class YslParserPipeline:
 #     def process_item(self, item, spider):
@@ -22,5 +23,5 @@ class JsonWriterPipeline:
         return item
 
     def close_spider(self, spider):
-        with open(f"WOMAN-WEAR-{datetime.datetime.now().strftime('%Y-%m')}.json", 'w') as f:
+        with open(f"WOMAN-WEAR-{datetime.now().strftime('%Y-%m')}.json", 'w') as f:
             json.dump(self.data, f, indent=4)

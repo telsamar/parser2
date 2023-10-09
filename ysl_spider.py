@@ -6,14 +6,17 @@ from selenium.webdriver.chrome.options import Options
 import json
 import datetime
 import time
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 
 class YslSpider(scrapy.Spider):
     name = 'ysl'
     custom_settings = {
         'FEED_FORMAT': 'json',
-        'FEED_URI': f"WOMAN-WEAR-{datetime.datetime.now().strftime('%Y-%m')}.json",
+        'FEED_URI': f"WOMANn-WEAR-{datetime.datetime.now().strftime('%Y-%m')}.json",
         'FEED_EXPORT_INDENT': 4,
         'LOG_LEVEL': 'INFO',
+        'ITEM_PIPELINES': {'ysl_parser.pipelines.JsonWriterPipeline': 1},
     }
 
     item_count = 0
@@ -38,7 +41,7 @@ class YslSpider(scrapy.Spider):
 
             if upper_level_href and upper_level_text:
                 self.logger.info(f"[UPPER LEVEL] {upper_level_href} - {upper_level_text}")
-                yield response.follow(upper_level_href, self.parse_details, meta={'category': ["WOMAN", upper_level_text]})
+                yield response.follow(upper_level_href, self.parse_details, meta={'category': [upper_level_text]})
 
             for li in level2_elem.xpath('.//ul[@data-ref="navlist"]/li'):
                 href = li.xpath('./a[@data-ref="link"]/@href').get()
@@ -47,7 +50,7 @@ class YslSpider(scrapy.Spider):
                 if href and link_text:
                     self.logger.info(f"[UPPER LEVEL] {upper_level_text}")
                     self.logger.info(f"[LOWER LEVEL] {href} - {link_text}")
-                    category_list = ["WOMAN", upper_level_text, link_text]
+                    category_list = [upper_level_text, link_text]
                     yield response.follow(href, self.parse_details, meta={'category': category_list})
 
     def parse_details(self, response):
@@ -95,15 +98,24 @@ class YslSpider(scrapy.Spider):
             description = response.css('p[data-bind="longDescription"]::text').get().strip()
             composition_elements = response.css('li.c-product__detailsitem::text').getall()
             composition = [elem.replace('\n', ' ').strip() for elem in composition_elements if elem.strip()]
-
             primary_color = response.css('p.c-product__colorvalue::text').get()
-            sizes_divs = response.xpath('//div[@class="c-customselect__menu"]/div[position()>1]')
-            sizes = [div.xpath('.//text()').get().strip() for div in sizes_divs if div.xpath('.//text()').get()]
 
-            if not sizes:
-                sizes = None
+            sizes_divs = response.xpath('//div[@class="c-customselect__menu"]/div')
+            sizes_dict = {}
+            for div in sizes_divs:
+                size_name = div.xpath('.//text()').get().strip()
+                if size_name and "YSL" in size_name:  # это может помочь фильтровать ненужные элементы, если такие есть
+                    sizes_dict[size_name] = {
+                        "name": size_name,
+                        "quantity": None,
+                        "is_available": None,
+                        "is_one_size": None
+                    }
 
-            color_list = []
+            sizes_value = sizes_dict if sizes_dict else None
+
+
+            color_list = []     
             if primary_color:
                 color_list.append(primary_color.strip())
             else:
@@ -111,7 +123,7 @@ class YslSpider(scrapy.Spider):
                 unique_colors = list(set(color_values))
                 color_list.extend(unique_colors)
 
-            image_urls = response.css('img.c-product__image::attr(src)').getall()
+            image_urls = response.css('ul.c-productcarousel__wrapper img.c-product__image::attr(src)').getall()
             unique_image_urls = list(set(image_urls))
 
             product = {
@@ -126,8 +138,9 @@ class YslSpider(scrapy.Spider):
                         "currency": None,
                         "description": description,
                         "composition": composition,
-                        "sizes": sizes,
+                        "sizes": sizes_value,
                     }
+                    
             self.item_count += 1 
             yield product
         else:

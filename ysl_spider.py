@@ -8,9 +8,10 @@ from datetime import datetime
 import time
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 import queue
 import threading
-import signal
+
 
 def set_permission(drive_service, file_id, email):
     permission = {
@@ -31,7 +32,7 @@ def find_or_create_sheet():
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = build('sheets', 'v4', credentials=creds)
 
-    title = f"WOMAN_8_R-WEAR-{datetime.now().strftime('%Y-%m')}"
+    title = f"WOMAN_9b_R-WEAR-{datetime.now().strftime('%Y-%m')}"
 
     results = drive_service.files().list(q=f"name='{title}'", fields="files(id, name)").execute()
     items = results.get('files', [])
@@ -96,11 +97,22 @@ def find_or_create_sheet():
 
         return file_id, creds, sheets_service
 
+write_queue = queue.Queue()
+
+def worker():
+    while True:
+        task = write_queue.get()
+        if task is None:
+            break
+        task()
+
+worker_thread = threading.Thread(target=worker)
+
 class YslSpider(scrapy.Spider):
     name = 'ysl'
     custom_settings = {
         'FEED_FORMAT': 'json',
-        'FEED_URI': f"WOMANs-WEAR-{datetime.now().strftime('%Y-%m')}.json",
+        'FEED_URI': f"WOMAN_9_R-WEAR-{datetime.now().strftime('%Y-%m')}.json",
         'FEED_EXPORT_INDENT': 4,
         'LOG_LEVEL': 'INFO',
         'ITEM_PIPELINES': {'ysl_parser.pipelines.JsonWriterPipeline': 1},
@@ -111,15 +123,7 @@ class YslSpider(scrapy.Spider):
     
     def start_requests(self):
         self.file_id, self.creds, self.sheets_service = find_or_create_sheet()
-        
-        self.write_queue = queue.Queue()
-        self.writer_thread = threading.Thread(target=self.write_to_sheet)
-        self.writer_thread.daemon = True
-        self.writer_thread.start()
-        signal.signal(signal.SIGINT, self.signal_handler)
-        signal.signal(signal.SIGTERM, self.signal_handler)
-        self.logger.info("Новый поток активизирован")
-        
+        worker_thread.start()
         yield SeleniumRequest(url='https://www.ysl.com/en-en', callback=self.parse)
 
     def parse(self, response):
@@ -185,6 +189,7 @@ class YslSpider(scrapy.Spider):
                 self.item_count += 1
                 category = response.meta.get('category', None)
                 yield response.follow(product_link, self.parse_product_details, meta={'category': category})
+
 
         self.logger.info(f"Обработано {self.item_count} предметов из категории {self.current_category}")
         driver.quit()
@@ -254,35 +259,59 @@ class YslSpider(scrapy.Spider):
                 "\n".join(product["categories"]), product["name"], product["url"],
                 "\n".join(product["color"]), product["price"], product["old_price"], product["currency"], "-", 
                 "\n".join(product["composition"]), "\n".join(product["sizes"]), product["description"], "-", datetime.now().strftime('%d.%m.%Y %H:%M:%S')]
-            self.write_queue.put((product, row))
-            
-            self.item_count += 1 
+
+            def update_sheet():
+                max_retries = 3
+                delay = 45
+                for attempt in range(max_retries):
+                    try:
+                        result = self.sheets_service.spreadsheets().values().get(spreadsheetId=self.file_id, range="A:A").execute()
+                        break
+                    except Exception as e:
+                        if "Quota exceeded" in str(e) and attempt < max_retries - 1:
+                            time.sleep(delay)
+                        else:
+                            raise e
+                articles = [item[0] for item in result.get("values", []) if item]
+                if product["article"] in articles:
+                    row_index = articles.index(product["article"]) + 1
+                    for attempt in range(max_retries):
+                        try:
+                            categories_result = self.sheets_service.spreadsheets().values().get(spreadsheetId=self.file_id, range=f"H{row_index}").execute()
+                            break
+                        except Exception as e:
+                            if "Quota exceeded" in str(e) and attempt < max_retries - 1:
+                                time.sleep(delay)
+                            else:
+                                raise e
+                    existing_categories = categories_result.get("values")[0][0].split("\n")
+                    combined_categories = list(set(existing_categories + product["categories"]))
+                    row[7] = "\n".join(combined_categories)
+                    
+                    range_name = f"A{row_index}:T{row_index}"
+                else:
+                    next_row = len(articles) + 1
+                    range_name = f"A{next_row}:T{next_row}"
+                body = {
+                    "values": [row]
+                }
+                for attempt in range(max_retries):
+                    try:
+                        self.sheets_service.spreadsheets().values().update(spreadsheetId=self.file_id, range=range_name, body=body, valueInputOption="USER_ENTERED").execute()
+                        self.logger.info(f"В таблицу успешно добавлено: {product_name.strip()}")
+                        break
+                    except Exception as e:
+                        if "Quota exceeded" in str(e) and attempt < max_retries - 1:
+                            time.sleep(delay)
+                        else:
+                            raise e
+                self.item_count += 1 
+
+            write_queue.put(update_sheet)
             yield product
         else:
             self.logger.info("Не найдено такого продукта")
 
-    def write_to_sheet(self):
-        while True:
-            product, row = self.write_queue.get()
-            if product is None:
-                break
-            
-            result = self.sheets_service.spreadsheets().values().get(spreadsheetId=self.file_id, range="A:A").execute()
-            values = result.get("values", [])
-            next_row = len(values) + 1
-            range_name = f"A{next_row}:T{next_row}"
-            body = {
-                "values": [row]
-            }
-            self.sheets_service.spreadsheets().values().update(spreadsheetId=self.file_id, range=range_name, body=body, valueInputOption="USER_ENTERED").execute()
-
-            self.item_count += 1
-
     def closed(self, reason):
-        self.write_queue.put((None, None))
-        self.writer_thread.join()
-
-    def signal_handler(self, signal, frame):
-        self.write_queue.put((None, None))
-        self.writer_thread.join()
-        self.crawler.engine.close_spider(self, 'Signal received')
+        write_queue.put(None)
+        worker_thread.join()

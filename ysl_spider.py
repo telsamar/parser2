@@ -12,7 +12,8 @@ from googleapiclient.errors import HttpError
 import queue
 import threading
 import signal
-
+import sys
+from scrapy.exceptions import CloseSpider
 
 
 def set_permission(drive_service, file_id, email):
@@ -104,7 +105,7 @@ write_queue = queue.Queue()
 def signal_handler(signum, frame):
     write_queue.put(None)
     worker_thread.join()
-    sys.exit(1)
+    raise CloseSpider('Пробуй еще:-)')
 
 def worker():
     while True:

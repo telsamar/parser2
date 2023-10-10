@@ -8,6 +8,9 @@ from datetime import datetime
 import time
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+import queue
+import threading
+import signal
 
 def set_permission(drive_service, file_id, email):
     permission = {
@@ -28,7 +31,7 @@ def find_or_create_sheet():
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = build('sheets', 'v4', credentials=creds)
 
-    title = f"WOMANa6-WEAR-{datetime.now().strftime('%Y-%m')}"
+    title = f"WOMAN_8_R-WEAR-{datetime.now().strftime('%Y-%m')}"
 
     results = drive_service.files().list(q=f"name='{title}'", fields="files(id, name)").execute()
     items = results.get('files', [])
@@ -108,6 +111,15 @@ class YslSpider(scrapy.Spider):
     
     def start_requests(self):
         self.file_id, self.creds, self.sheets_service = find_or_create_sheet()
+        
+        self.write_queue = queue.Queue()
+        self.writer_thread = threading.Thread(target=self.write_to_sheet)
+        self.writer_thread.daemon = True
+        self.writer_thread.start()
+        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGTERM, self.signal_handler)
+        self.logger.info("Новый поток активизирован")
+        
         yield SeleniumRequest(url='https://www.ysl.com/en-en', callback=self.parse)
 
     def parse(self, response):
@@ -173,7 +185,6 @@ class YslSpider(scrapy.Spider):
                 self.item_count += 1
                 category = response.meta.get('category', None)
                 yield response.follow(product_link, self.parse_product_details, meta={'category': category})
-
 
         self.logger.info(f"Обработано {self.item_count} предметов из категории {self.current_category}")
         driver.quit()
@@ -243,6 +254,19 @@ class YslSpider(scrapy.Spider):
                 "\n".join(product["categories"]), product["name"], product["url"],
                 "\n".join(product["color"]), product["price"], product["old_price"], product["currency"], "-", 
                 "\n".join(product["composition"]), "\n".join(product["sizes"]), product["description"], "-", datetime.now().strftime('%d.%m.%Y %H:%M:%S')]
+            self.write_queue.put((product, row))
+            
+            self.item_count += 1 
+            yield product
+        else:
+            self.logger.info("Не найдено такого продукта")
+
+    def write_to_sheet(self):
+        while True:
+            product, row = self.write_queue.get()
+            if product is None:
+                break
+            
             result = self.sheets_service.spreadsheets().values().get(spreadsheetId=self.file_id, range="A:A").execute()
             values = result.get("values", [])
             next_row = len(values) + 1
@@ -251,8 +275,14 @@ class YslSpider(scrapy.Spider):
                 "values": [row]
             }
             self.sheets_service.spreadsheets().values().update(spreadsheetId=self.file_id, range=range_name, body=body, valueInputOption="USER_ENTERED").execute()
-            
-            self.item_count += 1 
-            yield product
-        else:
-            self.logger.info("Не найдено такого продукта")
+
+            self.item_count += 1
+
+    def closed(self, reason):
+        self.write_queue.put((None, None))
+        self.writer_thread.join()
+
+    def signal_handler(self, signal, frame):
+        self.write_queue.put((None, None))
+        self.writer_thread.join()
+        self.crawler.engine.close_spider(self, 'Signal received')

@@ -9,7 +9,6 @@ import time
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
-
 def set_permission(drive_service, file_id, email):
     permission = {
         'type': 'user',
@@ -29,7 +28,7 @@ def find_or_create_sheet():
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = build('sheets', 'v4', credentials=creds)
 
-    title = f"WOMANa-WEAR-{datetime.now().strftime('%Y-%m')}"
+    title = f"WOMANa6-WEAR-{datetime.now().strftime('%Y-%m')}"
 
     results = drive_service.files().list(q=f"name='{title}'", fields="files(id, name)").execute()
     items = results.get('files', [])
@@ -37,8 +36,25 @@ def find_or_create_sheet():
     if items:
         print(f"Таблица уже существует с ID: {items[0]['id']}")
         file_id = items[0]['id']
+        sheet_metadata = sheets_service.spreadsheets().get(spreadsheetId=file_id).execute()
+        current_rows = sheet_metadata['sheets'][0]['properties']['gridProperties']['rowCount']
+        if current_rows < 30000:
+            rows_to_add = 30000 - current_rows
+
+            request = {
+                "requests": [
+                    {
+                        "appendCells": {
+                            "sheetId": 0,
+                            "rows": [{"values": [{}]} for _ in range(rows_to_add)],
+                            "fields": "*"
+                        }
+                    }
+                ]
+            }
+            sheets_service.spreadsheets().batchUpdate(spreadsheetId=file_id, body=request).execute()
         set_permission(drive_service, file_id, "testarmen4@gmail.com")
-        return file_id, creds
+        return file_id, creds, sheets_service
 
     else:
         print("Создание новой таблицы.")
@@ -49,15 +65,39 @@ def find_or_create_sheet():
         }
         spreadsheet = sheets_service.spreadsheets().create(body=spreadsheet, fields='spreadsheetId').execute()
         file_id = spreadsheet.get("spreadsheetId")
-        set_permission(drive_service, file_id, "testarmen4@gmail.com")
-        return file_id, creds
+        
+        headers = ["Article", "Image 1", "Image 2", "Image 3", "Image 4", "Image 5", "Image 6", "Categories", "Name", 
+                   "URL", "Color", "Price", "Old Price", "Currency", "Price, rub.", "Composition", "Sizes", "Description", "Tags", "Date"]
+        body = {
+            'values': [headers]
+        }
+        sheets_service.spreadsheets().values().update(spreadsheetId=file_id, range="A1:T1", body=body, valueInputOption="USER_ENTERED").execute()
 
+        current_rows = 1
+        rows_to_add = 30000 - current_rows
+
+        request = {
+            "requests": [
+                {
+                    "appendCells": {
+                        "sheetId": 0,
+                        "rows": [{"values": [{} for _ in range(len(headers))]} for _ in range(rows_to_add)],
+                        "fields": "*"
+                    }
+                }
+            ]
+        }
+        sheets_service.spreadsheets().batchUpdate(spreadsheetId=file_id, body=request).execute()
+
+        set_permission(drive_service, file_id, "testarmen4@gmail.com")
+
+        return file_id, creds, sheets_service
 
 class YslSpider(scrapy.Spider):
     name = 'ysl'
     custom_settings = {
         'FEED_FORMAT': 'json',
-        'FEED_URI': f"WOMANn-WEAR-{datetime.now().strftime('%Y-%m')}.json",
+        'FEED_URI': f"WOMANs-WEAR-{datetime.now().strftime('%Y-%m')}.json",
         'FEED_EXPORT_INDENT': 4,
         'LOG_LEVEL': 'INFO',
         'ITEM_PIPELINES': {'ysl_parser.pipelines.JsonWriterPipeline': 1},
@@ -67,11 +107,8 @@ class YslSpider(scrapy.Spider):
     current_category = None
     
     def start_requests(self):
-        file_id, creds = find_or_create_sheet()
-        self.file_id = file_id
-        self.creds = creds
+        self.file_id, self.creds, self.sheets_service = find_or_create_sheet()
         yield SeleniumRequest(url='https://www.ysl.com/en-en', callback=self.parse)
-
 
     def parse(self, response):
         chrome_options = Options()
@@ -83,6 +120,11 @@ class YslSpider(scrapy.Spider):
 
         parent_li = response.xpath('//button[contains(text(), "SAINT LAURENT WOMEN")]/ancestor::li[@data-ref="item"][1]')
         
+        excluded_links = [
+            "WINTER 23 LOOKS", "FALL 23 LOOKS", "ALL READY TO WEAR",
+            "ALL SHOES", "ALL HANDBAGS", "ALL SMALL LEATHER GOODS",
+            "ALL ACCESSORIES", "ALL JEWELRY"
+        ]
         for level2_elem in parent_li.xpath('.//li[@data-level2="true"]'):
             upper_level_href = level2_elem.xpath('./a[@data-ref="link"]/@href').get()
             upper_level_text = level2_elem.xpath('./a[@data-ref="link"]/text()|./button[@data-ref="link"]/text()').get().strip()
@@ -95,7 +137,7 @@ class YslSpider(scrapy.Spider):
                 href = li.xpath('./a[@data-ref="link"]/@href').get()
                 link_text = li.xpath('./a[@data-ref="link"]/text()').get().strip() if href else None
 
-                if href and link_text:
+                if href and link_text and link_text not in excluded_links:
                     self.logger.info(f"[UPPER LEVEL] {upper_level_text}")
                     self.logger.info(f"[LOWER LEVEL] {href} - {link_text}")
                     category_list = [upper_level_text, link_text]
@@ -132,7 +174,8 @@ class YslSpider(scrapy.Spider):
                 category = response.meta.get('category', None)
                 yield response.follow(product_link, self.parse_product_details, meta={'category': category})
 
-        self.logger.info(f"Processed {self.item_count} items for category {self.current_category}")
+
+        self.logger.info(f"Обработано {self.item_count} предметов из категории {self.current_category}")
         driver.quit()
 
     def parse_product_details(self, response):
@@ -180,14 +223,35 @@ class YslSpider(scrapy.Spider):
                         "name": product_name.strip(),
                         "color": color_list,
                         "images": unique_image_urls,
-                        "price": None,
-                        "old_price": None,
-                        "currency": None,
+                        "price": "-",
+                        "old_price": "-",
+                        "currency": "-",
                         "description": description,
                         "composition": composition,
                         "sizes": sizes_value,
                     }
-                    
+
+            image_formula1 = f'=IMAGE("{product["images"][0]}")' if len(product["images"]) > 0 else "-"
+            image_formula2 = f'=IMAGE("{product["images"][1]}")' if len(product["images"]) > 1 else "-"
+            image_formula3 = f'=IMAGE("{product["images"][2]}")' if len(product["images"]) > 2 else "-"
+            image_formula4 = f'=IMAGE("{product["images"][3]}")' if len(product["images"]) > 3 else "-"
+            image_formula5 = f'=IMAGE("{product["images"][4]}")' if len(product["images"]) > 4 else "-"
+            image_formula6 = f'=IMAGE("{product["images"][5]}")' if len(product["images"]) > 5 else "-"
+
+            row = [product["article"], 
+                image_formula1, image_formula2, image_formula3, image_formula4, image_formula5, image_formula6,
+                "\n".join(product["categories"]), product["name"], product["url"],
+                "\n".join(product["color"]), product["price"], product["old_price"], product["currency"], "-", 
+                "\n".join(product["composition"]), "\n".join(product["sizes"]), product["description"], "-", datetime.now().strftime('%d.%m.%Y %H:%M:%S')]
+            result = self.sheets_service.spreadsheets().values().get(spreadsheetId=self.file_id, range="A:A").execute()
+            values = result.get("values", [])
+            next_row = len(values) + 1
+            range_name = f"A{next_row}:T{next_row}"
+            body = {
+                "values": [row]
+            }
+            self.sheets_service.spreadsheets().values().update(spreadsheetId=self.file_id, range=range_name, body=body, valueInputOption="USER_ENTERED").execute()
+            
             self.item_count += 1 
             yield product
         else:

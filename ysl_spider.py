@@ -11,6 +11,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import queue
 import threading
+import signal
+
 
 
 def set_permission(drive_service, file_id, email):
@@ -32,7 +34,7 @@ def find_or_create_sheet():
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = build('sheets', 'v4', credentials=creds)
 
-    title = f"WOMAN_9b_R-WEAR-{datetime.now().strftime('%Y-%m')}"
+    title = f"WOMAN_9_R-WEAR-{datetime.now().strftime('%Y-%m')}"
 
     results = drive_service.files().list(q=f"name='{title}'", fields="files(id, name)").execute()
     items = results.get('files', [])
@@ -99,6 +101,11 @@ def find_or_create_sheet():
 
 write_queue = queue.Queue()
 
+def signal_handler(signum, frame):
+    write_queue.put(None)
+    worker_thread.join()
+    sys.exit(1)
+
 def worker():
     while True:
         task = write_queue.get()
@@ -123,7 +130,9 @@ class YslSpider(scrapy.Spider):
     
     def start_requests(self):
         self.file_id, self.creds, self.sheets_service = find_or_create_sheet()
+        signal.signal(signal.SIGINT, signal_handler)
         worker_thread.start()
+        self.logger.warning("Второй поток начал работу")
         yield SeleniumRequest(url='https://www.ysl.com/en-en', callback=self.parse)
 
     def parse(self, response):
@@ -189,7 +198,6 @@ class YslSpider(scrapy.Spider):
                 self.item_count += 1
                 category = response.meta.get('category', None)
                 yield response.follow(product_link, self.parse_product_details, meta={'category': category})
-
 
         self.logger.info(f"Обработано {self.item_count} предметов из категории {self.current_category}")
         driver.quit()
@@ -314,4 +322,5 @@ class YslSpider(scrapy.Spider):
 
     def closed(self, reason):
         write_queue.put(None)
+        self.logger.warning("Второй поток завершил работу")
         worker_thread.join()

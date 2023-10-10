@@ -220,7 +220,7 @@ class YslSpider(scrapy.Spider):
             sizes_dict = {}
             for div in sizes_divs:
                 size_name = div.xpath('.//text()').get().strip()
-                if size_name and "YSL" in size_name:  # это может помочь фильтровать ненужные элементы, если такие есть
+                if size_name and "YSL" in size_name:
                     sizes_dict[size_name] = {
                         "name": size_name,
                         "quantity": None,
@@ -270,8 +270,8 @@ class YslSpider(scrapy.Spider):
                 "\n".join(product["composition"]), "\n".join(product["sizes"]), product["description"], "-", datetime.now().strftime('%d.%m.%Y %H:%M:%S')]
 
             def update_sheet():
-                max_retries = 3
-                delay = 45
+                max_retries = 5
+                delay = 13
                 for attempt in range(max_retries):
                     try:
                         result = self.sheets_service.spreadsheets().values().get(spreadsheetId=self.file_id, range="A:A").execute()

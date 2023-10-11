@@ -15,7 +15,6 @@ import signal
 import sys
 from scrapy.exceptions import CloseSpider
 
-
 def set_permission(drive_service, file_id, email):
     permission = {
         'type': 'user',
@@ -35,7 +34,7 @@ def find_or_create_sheet():
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = build('sheets', 'v4', credentials=creds)
 
-    title = f"WOMAN_9_R-WEAR-{datetime.now().strftime('%Y-%m')}"
+    title = f"WOMAN_9_R5-WEAR-{datetime.now().strftime('%Y-%m')}"
 
     results = drive_service.files().list(q=f"name='{title}'", fields="files(id, name)").execute()
     items = results.get('files', [])
@@ -73,7 +72,7 @@ def find_or_create_sheet():
         spreadsheet = sheets_service.spreadsheets().create(body=spreadsheet, fields='spreadsheetId').execute()
         file_id = spreadsheet.get("spreadsheetId")
         
-        headers = ["Article", "Image 1", "Image 2", "Image 3", "Image 4", "Image 5", "Image 6", "Categories", "Name", 
+        headers = ["Article", "Image 1", "Image 2", "Image 3", "Categories", "Name", 
                    "URL", "Color", "Price", "Old Price", "Currency", "Price, rub.", "Composition", "Sizes", "Description", "Tags", "Date"]
         body = {
             'values': [headers]
@@ -83,18 +82,72 @@ def find_or_create_sheet():
         current_rows = 1
         rows_to_add = 30000 - current_rows
 
-        request = {
-            "requests": [
-                {
-                    "appendCells": {
-                        "sheetId": 0,
-                        "rows": [{"values": [{} for _ in range(len(headers))]} for _ in range(rows_to_add)],
-                        "fields": "*"
-                    }
-                }
-            ]
+        set_row_height_request = {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": 0,
+                    "dimension": "ROWS",
+                    "startIndex": 1,
+                },
+                "properties": {
+                    "pixelSize": 245
+                },
+                "fields": "pixelSize"
+            }
         }
-        sheets_service.spreadsheets().batchUpdate(spreadsheetId=file_id, body=request).execute()
+
+        text_wrap_request = {
+            "repeatCell": {
+                "range": {
+                    "sheetId": 0,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": 17
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "wrapStrategy": "WRAP"
+                    }
+                },
+                "fields": "userEnteredFormat.wrapStrategy"
+            }
+        }
+
+        set_column_width_request = {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": 0,
+                    "dimension": "COLUMNS",
+                    "startIndex": 0,
+                    "endIndex": 17
+                },
+                "properties": {
+                    "pixelSize": 150
+                },
+                "fields": "pixelSize"
+            }
+        }
+
+        text_alignment_request = {
+            "repeatCell": {
+                "range": {
+                    "sheetId": 0,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": 17
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "horizontalAlignment": "LEFT",
+                        "verticalAlignment": "TOP"
+                    }
+                },
+                "fields": "userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment"
+            }
+        }
+
+        sheets_service.spreadsheets().batchUpdate(
+            spreadsheetId=file_id, 
+            body={"requests": [set_column_width_request, set_row_height_request, text_wrap_request, text_alignment_request]}
+        ).execute()
 
         set_permission(drive_service, file_id, "testarmen4@gmail.com")
 
@@ -120,7 +173,7 @@ class YslSpider(scrapy.Spider):
     name = 'ysl'
     custom_settings = {
         'FEED_FORMAT': 'json',
-        'FEED_URI': f"WOMAN_9_R-WEAR-{datetime.now().strftime('%Y-%m')}.json",
+        'FEED_URI': f"WOMAN_9_R5-WEAR-{datetime.now().strftime('%Y-%m')}.json",
         'FEED_EXPORT_INDENT': 4,
         'LOG_LEVEL': 'INFO',
         'ITEM_PIPELINES': {'ysl_parser.pipelines.JsonWriterPipeline': 1},
@@ -213,7 +266,7 @@ class YslSpider(scrapy.Spider):
             article = response.css('span[data-bind="styleMaterialColor"]::text').get().strip()
             description = response.css('p[data-bind="longDescription"]::text').get().strip()
             composition_elements = response.css('li.c-product__detailsitem::text').getall()
-            composition = [elem.replace('\n', ' ').strip() for elem in composition_elements if elem.strip()]
+            composition = [elem.replace('\n', ' ').strip() for elem in composition_elements if elem.strip() and "%" in elem]
             primary_color = response.css('p.c-product__colorvalue::text').get()
 
             sizes_divs = response.xpath('//div[@class="c-customselect__menu"]/div')
@@ -259,15 +312,12 @@ class YslSpider(scrapy.Spider):
             image_formula1 = f'=IMAGE("{product["images"][0]}")' if len(product["images"]) > 0 else "-"
             image_formula2 = f'=IMAGE("{product["images"][1]}")' if len(product["images"]) > 1 else "-"
             image_formula3 = f'=IMAGE("{product["images"][2]}")' if len(product["images"]) > 2 else "-"
-            image_formula4 = f'=IMAGE("{product["images"][3]}")' if len(product["images"]) > 3 else "-"
-            image_formula5 = f'=IMAGE("{product["images"][4]}")' if len(product["images"]) > 4 else "-"
-            image_formula6 = f'=IMAGE("{product["images"][5]}")' if len(product["images"]) > 5 else "-"
 
             row = [product["article"], 
-                image_formula1, image_formula2, image_formula3, image_formula4, image_formula5, image_formula6,
-                "\n".join(product["categories"]), product["name"], product["url"],
+                image_formula1, image_formula2, image_formula3,
+                "; ".join(product["categories"]), product["name"], product["url"],
                 "\n".join(product["color"]), product["price"], product["old_price"], product["currency"], "-", 
-                "\n".join(product["composition"]), "\n".join(product["sizes"]), product["description"], "-", datetime.now().strftime('%d.%m.%Y %H:%M:%S')]
+                " ".join(product["composition"]), "\n".join(product["sizes"]), product["description"], "-", datetime.now().strftime('%d.%m.%Y %H:%M:%S')]
 
             def update_sheet():
                 max_retries = 5
@@ -286,24 +336,25 @@ class YslSpider(scrapy.Spider):
                     row_index = articles.index(product["article"]) + 1
                     for attempt in range(max_retries):
                         try:
-                            categories_result = self.sheets_service.spreadsheets().values().get(spreadsheetId=self.file_id, range=f"H{row_index}").execute()
+                            categories_result = self.sheets_service.spreadsheets().values().get(spreadsheetId=self.file_id, range=f"E{row_index}").execute()
                             break
                         except Exception as e:
                             if "Quota exceeded" in str(e) and attempt < max_retries - 1:
                                 time.sleep(delay)
                             else:
                                 raise e
-                    existing_categories = categories_result.get("values")[0][0].split("\n")
+                    existing_categories = categories_result.get("values")[0][0].split("; ")
                     combined_categories = list(set(existing_categories + product["categories"]))
-                    row[7] = "\n".join(combined_categories)
+                    row[4] = "; ".join(combined_categories)
                     
-                    range_name = f"A{row_index}:T{row_index}"
+                    range_name = f"A{row_index}:Q{row_index}"
                 else:
                     next_row = len(articles) + 1
-                    range_name = f"A{next_row}:T{next_row}"
+                    range_name = f"A{next_row}:Q{next_row}"
                 body = {
                     "values": [row]
                 }
+
                 for attempt in range(max_retries):
                     try:
                         self.sheets_service.spreadsheets().values().update(spreadsheetId=self.file_id, range=range_name, body=body, valueInputOption="USER_ENTERED").execute()

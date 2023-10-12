@@ -34,7 +34,7 @@ def find_or_create_sheet():
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = build('sheets', 'v4', credentials=creds)
 
-    title = f"WOMAN_9_R5-WEAR-{datetime.now().strftime('%Y-%m')}"
+    title = f"WOMAN-WEAR-{datetime.now().strftime('%Y-%m')}"
 
     results = drive_service.files().list(q=f"name='{title}'", fields="files(id, name)").execute()
     items = results.get('files', [])
@@ -173,7 +173,7 @@ class YslSpider(scrapy.Spider):
     name = 'ysl'
     custom_settings = {
         'FEED_FORMAT': 'json',
-        'FEED_URI': f"WOMAN_9_R5-WEAR-{datetime.now().strftime('%Y-%m')}.json",
+        'FEED_URI': f"WOMAN-WEAR-{datetime.now().strftime('%Y-%m')}.json",
         'FEED_EXPORT_INDENT': 4,
         'LOG_LEVEL': 'INFO',
         'ITEM_PIPELINES': {'ysl_parser.pipelines.JsonWriterPipeline': 1},
@@ -273,7 +273,8 @@ class YslSpider(scrapy.Spider):
             sizes_dict = {}
             for div in sizes_divs:
                 size_name = div.xpath('.//text()').get().strip()
-                if size_name and "YSL" in size_name:
+                size_name = size_name.replace("YSL", "").replace("- FIND IN STORE", "").replace("- PRE-ORDER", "").strip()
+                if size_name:
                     sizes_dict[size_name] = {
                         "name": size_name,
                         "quantity": None,

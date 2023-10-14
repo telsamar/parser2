@@ -1,5 +1,5 @@
 import scrapy
-from scrapy_selenium import SeleniumRequest
+from scrapy.http import TextResponse
 from selenium import webdriver
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.chrome.options import Options
@@ -15,6 +15,8 @@ import signal
 import sys
 from scrapy.exceptions import CloseSpider
 
+has_worker_thread_started = False
+
 def set_permission(drive_service, file_id, email):
     permission = {
         'type': 'user',
@@ -28,7 +30,7 @@ def set_permission(drive_service, file_id, email):
         print(f"Ошибка разрешения для {email}. Причина: {e}")
 
 def find_or_create_sheet():
-    creds = Credentials.from_service_account_file('ysl_parser/spiders/newtest-401506-8c354a45d760.json',
+    creds = Credentials.from_service_account_file('ysl_parser/spiders/testfreelimit-e07b3257a568.json',
                                                   scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
     
     drive_service = build('drive', 'v3', credentials=creds)
@@ -59,7 +61,6 @@ def find_or_create_sheet():
                 ]
             }
             sheets_service.spreadsheets().batchUpdate(spreadsheetId=file_id, body=request).execute()
-        set_permission(drive_service, file_id, "testarmen4@gmail.com")
         return file_id, creds, sheets_service
 
     else:
@@ -170,6 +171,11 @@ def worker():
 worker_thread = threading.Thread(target=worker)
 
 class YslSpider(scrapy.Spider):
+    def __init__(self):
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        self.driver = webdriver.Chrome(executable_path='/Users/telsamar/Programmer/fl/4_SL/chromedriver', options=chrome_options)
+
     name = 'ysl'
     custom_settings = {
         'FEED_FORMAT': 'json',
@@ -183,19 +189,16 @@ class YslSpider(scrapy.Spider):
     current_category = None
     
     def start_requests(self):
+        global has_worker_thread_started
         self.file_id, self.creds, self.sheets_service = find_or_create_sheet()
         signal.signal(signal.SIGINT, signal_handler)
         worker_thread.start()
+        has_worker_thread_started = True
         self.logger.warning("Второй поток начал работу")
-        yield SeleniumRequest(url='https://www.ysl.com/en-en', callback=self.parse)
+        yield scrapy.Request(url='https://www.ysl.com/en-en', callback=self.parse)
 
     def parse(self, response):
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        driver = webdriver.Chrome(options=chrome_options)
-        driver.get(response.url)
         time.sleep(5)
-        driver.quit()
 
         parent_li = response.xpath('//button[contains(text(), "SAINT LAURENT WOMEN")]/ancestor::li[@data-ref="item"][1]')
         
@@ -224,25 +227,21 @@ class YslSpider(scrapy.Spider):
 
     def parse_details(self, response):
         self.current_category = response.meta.get('category', None)
-        self.item_count = 0 
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        driver = webdriver.Chrome(options=chrome_options)
-        driver.get(response.url)
+        self.driver.get(response.url)
         time.sleep(1)
-        last_height = driver.execute_script("return document.body.scrollHeight")
+        last_height = self.driver.execute_script("return document.body.scrollHeight")
 
         while True:
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(2)
-            new_height = driver.execute_script("return document.body.scrollHeight")
+            new_height = self.driver.execute_script("return document.body.scrollHeight")
             if new_height == last_height:
                 break
             last_height = new_height
             self.logger.warning("Еще листаю")
         self.logger.warning("Долистали до конца")
 
-        source = driver.page_source
+        source = self.driver.page_source
         new_response = scrapy.http.HtmlResponse(url=response.url, body=source, encoding='utf-8')
         
         product_divs = new_response.xpath('//div[@class="c-product__inner"]')
@@ -253,15 +252,16 @@ class YslSpider(scrapy.Spider):
                 category = response.meta.get('category', None)
                 yield response.follow(product_link, self.parse_product_details, meta={'category': category})
 
-        self.logger.info(f"Обработано {self.item_count} предметов из категории {self.current_category}")
-        driver.quit()
+        self.logger.info(f"Проверено {self.item_count} предметов, сейчас категория {self.current_category}")
 
     def parse_product_details(self, response):
         product_name = response.css('h1.c-product__name::text').get()
         product_link = response.url
         if product_name:
             self.logger.info(f"Product Name: {product_name.strip()}")
-            category_list = response.meta.get('category', [])
+
+            parts = product_link.split("https://www.ysl.com/en-en/")[1].split('/')
+            category_list = parts[:-1]
 
             article = response.css('span[data-bind="styleMaterialColor"]::text').get().strip()
             description = response.css('p[data-bind="longDescription"]::text').get().strip()
@@ -344,7 +344,11 @@ class YslSpider(scrapy.Spider):
                                 time.sleep(delay)
                             else:
                                 raise e
-                    existing_categories = categories_result.get("values")[0][0].split("; ")
+                                
+                    values = categories_result.get("values")
+                    existing_categories = []
+                    if values and len(values) > 0 and len(values[0]) > 0:
+                        existing_categories = values[0][0].split("; ")
                     combined_categories = list(set(existing_categories + product["categories"]))
                     row[4] = "; ".join(combined_categories)
                     
@@ -375,5 +379,7 @@ class YslSpider(scrapy.Spider):
 
     def closed(self, reason):
         write_queue.put(None)
+        self.driver.quit()
         self.logger.warning("Второй поток завершил работу")
-        worker_thread.join()
+        if has_worker_thread_started:
+            worker_thread.join()

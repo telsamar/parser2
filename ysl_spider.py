@@ -1,6 +1,7 @@
 import scrapy
 from scrapy.http import TextResponse
 from selenium import webdriver
+from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.chrome.options import Options
 import json
@@ -32,6 +33,8 @@ def set_permission(drive_service, file_id, email):
 def find_or_create_sheet():
     creds = Credentials.from_service_account_file('ysl_parser/spiders/testfreelimit-e07b3257a568.json',
                                                   scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
+    # creds = Credentials.from_service_account_file('/app/ysl_parser/ysl_parser/spiders/testfreelimit-e07b3257a568.json',
+    #                                               scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
     
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = build('sheets', 'v4', credentials=creds)
@@ -174,8 +177,13 @@ class YslSpider(scrapy.Spider):
     def __init__(self):
         chrome_options = Options()
         chrome_options.add_argument("--headless")
-        self.driver = webdriver.Chrome(executable_path='/Users/telsamar/Programmer/fl/4_SL/chromedriver', options=chrome_options)
-
+        self.driver = webdriver.Remote(
+            # command_executor='http://172.17.0.2:4444',
+            command_executor='http://localhost:4444',
+            desired_capabilities=DesiredCapabilities.CHROME,
+            options=chrome_options
+        )
+        
     name = 'ysl'
     custom_settings = {
         'FEED_FORMAT': 'json',
@@ -239,6 +247,7 @@ class YslSpider(scrapy.Spider):
                 break
             last_height = new_height
             self.logger.warning("Еще листаю")
+            
         self.logger.warning("Долистали до конца")
 
         source = self.driver.page_source

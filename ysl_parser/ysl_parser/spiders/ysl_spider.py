@@ -31,10 +31,10 @@ def set_permission(drive_service, file_id, email):
         print(f"Ошибка разрешения для {email}. Причина: {e}")
 
 def find_or_create_sheet():
-    creds = Credentials.from_service_account_file('ysl_parser/spiders/testfreelimit-e07b3257a568.json',
-                                                  scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
-    # creds = Credentials.from_service_account_file('/app/ysl_parser/ysl_parser/spiders/testfreelimit-e07b3257a568.json',
+    # creds = Credentials.from_service_account_file('ysl_parser/spiders/testfreelimit-e07b3257a568.json',
     #                                               scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
+    creds = Credentials.from_service_account_file('/app/ysl_parser/ysl_parser/spiders/testfreelimit-e07b3257a568.json',
+                                                  scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
     
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = build('sheets', 'v4', credentials=creds)
@@ -177,10 +177,11 @@ class YslSpider(scrapy.Spider):
     def __init__(self):
         chrome_options = Options()
         chrome_options.add_argument("--headless")
+        chrome_options.set_capability("browserName", "chrome")
         self.driver = webdriver.Remote(
-            # command_executor='http://172.17.0.2:4444',
-            command_executor='http://localhost:4444',
-            desired_capabilities=DesiredCapabilities.CHROME,
+            command_executor='http://172.17.0.2:4444',
+            # command_executor='http://localhost:4444',
+            # desired_capabilities=DesiredCapabilities.CHROME,
             options=chrome_options
         )
         
@@ -269,8 +270,9 @@ class YslSpider(scrapy.Spider):
         if product_name:
             self.logger.info(f"Product Name: {product_name.strip()}")
 
-            parts = product_link.split("https://www.ysl.com/en-en/")[1].split('/')
-            category_list = parts[:-1]
+            # parts = product_link.split("https://www.ysl.com/en-en/")[1].split('/')
+            # category_list = parts[:-1]
+            category_list = response.meta.get('category', [])
 
             article = response.css('span[data-bind="styleMaterialColor"]::text').get().strip()
             description = response.css('p[data-bind="longDescription"]::text').get().strip()

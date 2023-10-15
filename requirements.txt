@@ -1,0 +1,4 @@
+scrapy
+selenium
+google-auth
+google-api-python-client

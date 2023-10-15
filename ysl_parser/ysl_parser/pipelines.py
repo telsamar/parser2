@@ -9,10 +9,6 @@ from itemadapter import ItemAdapter
 import json
 from datetime import datetime
 
-# class YslParserPipeline:
-#     def process_item(self, item, spider):
-#         return item
-
 class JsonWriterPipeline:
 
     def __init__(self):

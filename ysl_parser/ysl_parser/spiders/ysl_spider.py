@@ -31,9 +31,9 @@ def set_permission(drive_service, file_id, email):
         print(f"Ошибка разрешения для {email}. Причина: {e}")
 
 def find_or_create_sheet():
-    # creds = Credentials.from_service_account_file('ysl_parser/spiders/testfreelimit-e07b3257a568.json',
+    # creds = Credentials.from_service_account_file('ysl_parser/spiders/"***",.json',
     #                                               scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
-    creds = Credentials.from_service_account_file('/app/ysl_parser/ysl_parser/spiders/testfreelimit-e07b3257a568.json',
+    creds = Credentials.from_service_account_file('/app/ysl_parser/ysl_parser/spiders/"***",.json',
                                                   scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
     
     drive_service = build('drive', 'v3', credentials=creds)
@@ -153,7 +153,7 @@ def find_or_create_sheet():
             body={"requests": [set_column_width_request, set_row_height_request, text_wrap_request, text_alignment_request]}
         ).execute()
 
-        set_permission(drive_service, file_id, "testarmen4@gmail.com")
+        set_permission(drive_service, file_id, ""***",")
 
         return file_id, creds, sheets_service
 
@@ -179,7 +179,7 @@ class YslSpider(scrapy.Spider):
         chrome_options.add_argument("--headless")
         chrome_options.set_capability("browserName", "chrome")
         self.driver = webdriver.Remote(
-            command_executor='http://172.17.0.2:4444',
+            command_executor='http://selenium:4444/wd/hub',
             # command_executor='http://localhost:4444',
             # desired_capabilities=DesiredCapabilities.CHROME,
             options=chrome_options
@@ -389,6 +389,7 @@ class YslSpider(scrapy.Spider):
             self.logger.info("Не найдено такого продукта")
 
     def closed(self, reason):
+        time.sleep(5)
         write_queue.put(None)
         self.driver.quit()
         self.logger.warning("Второй поток завершил работу")
